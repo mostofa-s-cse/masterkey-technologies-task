@@ -1,36 +1,41 @@
-import pool from '../database/db';
-import { Order, OrderItem } from '../models';
+import { Op } from 'sequelize';
+import { sequelize, Order, OrderItem, Inventory } from '../database/index';
 
 export async function placeOrder(order: Order, items: OrderItem[]): Promise<number> {
-    const client = await pool.connect();
+    const transaction = await sequelize.transaction();
     try {
-        await client.query('BEGIN');
-        const res = await client.query(
-            'INSERT INTO orders(user_id, status, total) VALUES($1, $2, $3) RETURNING id',
-            [order.user_id, 'PENDING', order.total]
-        );
-        const orderId = res.rows[0].id;
+        // Create the order
+        const createdOrder = await Order.create({
+            user_id: order.user_id,
+            status: 'PENDING',
+            total: order.total,
+        }, { transaction });
 
+        // Create order items
         for (const item of items) {
-            await client.query(
-                'INSERT INTO order_items(order_id, product_id, quantity, price) VALUES($1, $2, $3, $4)',
-                [orderId, item.product_id, item.quantity, item.price]
+            await OrderItem.create({
+                order_id: createdOrder.id,
+                product_id: item.product_id,
+                quantity: item.quantity,
+                price: item.price,
+            }, { transaction });
+
+            // Update inventory
+            const [updatedRows] = await Inventory.update(
+                { stock: sequelize.literal(`stock - ${item.quantity}`) },
+                { where: { product_id: item.product_id, stock: { [Op.gte]: item.quantity } }, transaction }
+                // Here we use Op.gte instead of sequelize.Op.gte
             );
-            const updateRes = await client.query(
-                'UPDATE inventory SET stock = stock - $1 WHERE product_id = $2 AND stock >= $1 RETURNING stock',
-                [item.quantity, item.product_id]
-            );
-            if (updateRes.rowCount === 0) {
+
+            if (updatedRows === 0) {
                 throw new Error('Insufficient stock');
             }
         }
 
-        await client.query('COMMIT');
-        return orderId;
+        await transaction.commit();
+        return createdOrder.id;
     } catch (e) {
-        await client.query('ROLLBACK');
+        await transaction.rollback();
         throw e;
-    } finally {
-        client.release();
     }
 }

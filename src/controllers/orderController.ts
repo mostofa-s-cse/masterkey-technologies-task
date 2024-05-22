@@ -3,6 +3,7 @@ import { placeOrder } from '../services/orderService';
 import SagaOrchestrator from '../services/sagaOrchestrator';
 import PaymentStep from '../services/steps/paymentStep';
 import ShippingStep from '../services/steps/shippingStep';
+import { DatabaseError, ValidationError } from 'sequelize';
 
 export default {
     async placeOrder(req: Request, res: Response) {
@@ -17,8 +18,19 @@ export default {
             await orchestrator.execute({ orderId });
 
             res.status(201).json({ orderId });
-        } catch (e) {
-            res.status(500).json({ error: 'Failed to place order' });
+        } catch (error) {
+            console.error('Error placing order:', error);
+
+            if (error instanceof ValidationError) {
+                // Handle validation errors
+                return res.status(400).json({ error: 'Validation error', details: error.errors });
+            } else if (error instanceof DatabaseError) {
+                // Handle database errors
+                return res.status(500).json({ error: 'Database error', details: error.message });
+            } else {
+                // Handle other errors
+                return res.status(500).json({ error: 'Failed to place order' });
+            }
         }
     }
 };
